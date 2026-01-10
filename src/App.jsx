@@ -4,7 +4,7 @@ import './App.css';
 import { db } from './firebase'; // Firebase ulanish faylingiz
 import { ref, onValue, set, push, remove, update } from "firebase/database";
 
-export default function App() {
+export default function app() {
   // --- HOLATLAR ---
   const [subjects, setSubjects] = useState([]);
   const [view, setView] = useState('landing');
