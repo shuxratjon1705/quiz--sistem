@@ -27,6 +27,7 @@ export default function App() {
   const [inputPin, setInputPin] = useState('');
   const [players, setPlayers] = useState([]); 
   const [score, setScore] = useState(0);
+  const [liveScores, setLiveScores] = useState({}); // JONLI BALLAR UCHUN
   const [newQ, setNewQ] = useState({ text: '', options: ['', '', '', ''], correct: 0 });
   const [newSubName, setNewSubName] = useState('');
   const [currentQIndex, setCurrentQIndex] = useState(0);
@@ -36,10 +37,10 @@ export default function App() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
-      if (currentUser) setView('teacher');
+      if (currentUser && view === 'auth') setView('teacher');
     });
     return () => unsubscribe();
-  }, []);
+  }, [view]);
 
   // --- DATABASE DATA ---
   useEffect(() => {
@@ -53,14 +54,11 @@ export default function App() {
           questions: data[key].questions ? Object.values(data[key].questions) : []
         }));
         
-        // Faqat kirgan o'qituvchining fanlarini ko'rsatish
         if (user) {
           setSubjects(list.filter(s => s.ownerId === user.uid));
         } else {
-          setSubjects([]);
+          setSubjects(list);
         }
-      } else {
-        setSubjects([]);
       }
     });
 
@@ -70,63 +68,42 @@ export default function App() {
         const data = snapshot.val();
         if (data) {
           if (data.players) setPlayers(Object.values(data.players));
+          
+          // Ballarni kuzatish
+          if (data.scores) setLiveScores(data.scores);
+          
           if (data.status === 'started' && view === 'lobby' && playerName) {
-            startActualGame();
+            const currentSub = subjects.find(s => s.id === data.subjectId);
+            if (currentSub && currentSub.questions.length > 0) {
+              setActiveSubId(data.subjectId);
+              setCurrentQIndex(0);
+              setTimer(currentSub.questions[0].time);
+              setView('quiz_mode');
+            }
           }
         }
       });
     }
-  }, [generatedPin, view, user]);
+  }, [generatedPin, view, user, subjects, playerName]);
 
   // --- LOGIN / REGISTER LOGIC ---
-  // --- LOGIN / REGISTER LOGIC (YANGILANGAN) ---
   const handleAuth = async () => {
     if (!username || !password) {
       alert("Iltimos, username va parolni to'liq yozing!");
       return;
     }
-    
-    // Username-ni tozalash va email formatiga keltirish
     const cleanUsername = username.trim().toLowerCase();
     const virtualEmail = `${cleanUsername}@quiz.com`;
 
     try {
       if (isSignUp) {
-        // RO'YXATDAN O'TISH
         await createUserWithEmailAndPassword(auth, virtualEmail, password);
         alert("Tabriklaymiz! Akkaunt ochildi.");
-        // Ro'yxatdan o'tgach, onAuthStateChanged uni avtomatik 'teacher'ga o'tkazadi
       } else {
-        // KIRISH
         await signInWithEmailAndPassword(auth, virtualEmail, password);
-        // Kirish muvaffaqiyatli bo'lsa, avtomatik 'teacher'ga o'tadi
       }
     } catch (err) {
-      console.error("Auth Error:", err.code);
-      
-      // Foydalanuvchi uchun tushunarli xabarlar
-      switch (err.code) {
-        case 'auth/invalid-credential':
-          alert("Username yoki parol xato! Iltimos, qaytadan tekshiring.");
-          break;
-        case 'auth/user-not-found':
-          alert("Bunday foydalanuvchi topilmadi. Avval ro'yxatdan o'ting.");
-          break;
-        case 'auth/wrong-password':
-          alert("Parol noto'g'ri!");
-          break;
-        case 'auth/email-already-in-use':
-          alert("Bu username allaqachon band! Boshqa username tanlang.");
-          break;
-        case 'auth/weak-password':
-          alert("Parol juda oddiy! Kamida 6 ta belgi bo'lishi kerak.");
-          break;
-        case 'auth/invalid-email':
-          alert("Username formatida xatolik bor.");
-          break;
-        default:
-          alert("Xatolik yuz berdi: " + err.message);
-      }
+      alert("Xatolik yuz berdi! Username band bo'lishi yoki parol xato bo'lishi mumkin.");
     }
   };
 
@@ -138,6 +115,16 @@ export default function App() {
     setPassword('');
   };
 
+  const goBackHome = () => {
+    setScore(0);
+    setGeneratedPin('');
+    setPlayerName('');
+    setInputPin('');
+    setLiveScores({});
+    if (user) setView('teacher');
+    else setView('auth');
+  };
+
   // --- SUBJECTS LOGIC ---
   const addSubject = () => {
     if (newSubName.trim() && user) {
@@ -145,7 +132,7 @@ export default function App() {
       push(subjectsRef, { 
         name: newSubName, 
         questions: [], 
-        ownerId: user.uid // Fan egasini biriktirish
+        ownerId: user.uid 
       });
       setNewSubName('');
     }
@@ -166,7 +153,7 @@ export default function App() {
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedPin(pin);
     setActiveSubId(subId);
-    set(ref(db, `games/${pin}`), { subjectId: subId, status: 'waiting', players: {} });
+    set(ref(db, `games/${pin}`), { subjectId: subId, status: 'waiting', players: {}, scores: {} });
     setView('lobby');
   };
 
@@ -178,6 +165,10 @@ export default function App() {
         if (data) {
           const newPlayerRef = push(ref(db, `games/${inputPin}/players`));
           set(newPlayerRef, playerName);
+          
+          // O'quvchi balini 0 bilan yaratish
+          set(ref(db, `games/${inputPin}/scores/${playerName}`), 0);
+          
           setGeneratedPin(inputPin);
           setActiveSubId(data.subjectId);
           setView('lobby');
@@ -190,15 +181,30 @@ export default function App() {
 
   const startActualGame = () => {
     const sub = subjects.find(s => s.id === activeSubId);
-    if (!sub) return;
-    if (!playerName) update(ref(db, `games/${generatedPin}`), { status: 'started' });
+    if (!sub || sub.questions.length === 0) {
+      alert("Savollar mavjud emas!");
+      return;
+    }
+    if (!playerName) {
+      update(ref(db, `games/${generatedPin}`), { status: 'started' });
+    }
     setCurrentQIndex(0);
     setTimer(sub.questions[0].time);
     setView('quiz_mode');
   };
 
   const handleAnswer = (isCorrect) => {
-    if (isCorrect) setScore(s => s + 100);
+    let newScore = score;
+    if (isCorrect) {
+      newScore = score + 100;
+      setScore(newScore);
+    }
+
+    // Ballni Firebase'da yangilash (Live Score uchun)
+    if (playerName && generatedPin) {
+      set(ref(db, `games/${generatedPin}/scores/${playerName}`), newScore);
+    }
+
     const sub = subjects.find(s => s.id === activeSubId);
     if (currentQIndex < sub.questions.length - 1) {
       const nextIdx = currentQIndex + 1;
@@ -227,7 +233,7 @@ export default function App() {
       
       {/* --- NAVBAR --- */}
       <nav className="navbar px-4 flex-shrink-0 shadow" style={{ height: '65px', backgroundColor: isDarkMode ? '#000' : lightPrimary }}>
-        <span className="navbar-brand fw-bold text-white" onClick={() => setView(user ? 'teacher' : 'auth')} style={{ cursor: 'pointer' }}>QUIZ MASTER</span>
+        <span className="navbar-brand fw-bold text-white" onClick={goBackHome} style={{ cursor: 'pointer' }}>QUIZ MASTER</span>
         <div className="d-flex gap-2">
           {user && <button className="btn btn-sm btn-danger" onClick={handleLogout}>Chiqish</button>}
           <button className="btn btn-sm btn-outline-light rounded-pill px-3" onClick={() => setIsDarkMode(!isDarkMode)}>
@@ -238,23 +244,20 @@ export default function App() {
 
       <div className="flex-grow-1 overflow-auto d-flex flex-column position-relative">
         
-        {/* --- LOGIN / SIGN UP OYNASI --- */}
+        {/* --- AUTH VIEW --- */}
         {view === 'auth' && (
           <div className="m-auto card p-4 shadow-lg border-0" style={{width: '380px', borderRadius: '20px'}}>
             <h2 className="text-center fw-bold mb-4">{isSignUp ? 'Sign Up' : 'Sign In'}</h2>
             <input type="text" className="form-control mb-3" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
             <input type="password" className="form-control mb-4" placeholder="Parol" value={password} onChange={e => setPassword(e.target.value)} />
-            
             <button className="btn btn-primary w-100 py-2 fw-bold mb-3 shadow-sm" onClick={handleAuth}>
               {isSignUp ? 'RO‘YXATDAN O‘TISH' : 'KIRISH'}
             </button>
-
             <div className="text-center mb-3">
               <button className="btn btn-link btn-sm text-decoration-none" onClick={() => setIsSignUp(!isSignUp)}>
                 {isSignUp ? "Akkauntingiz bormi? Sign In" : "Yangi akkaunt? Sign Up"}
               </button>
             </div>
-
             <div className="border-top pt-3 text-center">
               <button className="btn btn-outline-success rounded-pill w-100 fw-bold" onClick={() => setView('student_name')}>
                 👨‍🎓 Men o'quvchiman
@@ -266,7 +269,7 @@ export default function App() {
         {/* --- TEACHER VIEW --- */}
         {view === 'teacher' && user && (
           <div className="container py-5">
-            <h2 className="fw-bold mb-4 border-bottom pb-2">Mening Fanlarim (Baza)</h2>
+            <h2 className="fw-bold mb-4 border-bottom pb-2">Mening Fanlarim</h2>
             <div className="input-group mb-5 shadow rounded overflow-hidden">
               <input type="text" className="form-control form-control-lg border-0" placeholder="Yangi fan nomi..." value={newSubName} onChange={e => setNewSubName(e.target.value)} />
               <button className="btn px-4 fw-bold text-white border-0" style={{backgroundColor: lightPrimary}} onClick={addSubject}>+ Qo'shish</button>
@@ -277,12 +280,12 @@ export default function App() {
                   <div className="card h-100 p-4 shadow border-0" style={{borderRadius: '15px'}}>
                     <div className="d-flex justify-content-between align-items-start mb-2">
                       <h3 className="fw-bold mb-0">{s.name}</h3>
-                      <button className="btn btn-danger btn-sm rounded-circle" style={{width: '30px', height: '30px', padding: '0'}} onClick={() => remove(ref(db, `subjects/${s.id}`))}>×</button>
+                      <button className="btn btn-danger btn-sm rounded-circle" onClick={() => remove(ref(db, `subjects/${s.id}`))}>×</button>
                     </div>
-                    <p className="text-muted mb-4">Savollar: {s.questions.length}</p>
+                    <p className="text-muted">Savollar: {s.questions.length}</p>
                     <div className="mt-auto">
-                      <button className="btn btn-outline-primary w-100 mb-3 py-2 fw-bold" onClick={() => { setActiveSubId(s.id); setView('add_questions'); }}>Savollar tuzish</button>
-                      <button className="btn btn-danger w-100 py-2 fw-bold shadow-sm" onClick={() => startLobby(s.id)}>LIVE START</button>
+                      <button className="btn btn-outline-primary w-100 mb-2" onClick={() => { setActiveSubId(s.id); setView('add_questions'); }}>Tahrirlash</button>
+                      <button className="btn btn-danger w-100 shadow-sm" onClick={() => startLobby(s.id)}>LIVE START</button>
                     </div>
                   </div>
                 </div>
@@ -294,7 +297,7 @@ export default function App() {
         {/* --- ADD QUESTIONS --- */}
         {view === 'add_questions' && (
           <div className="m-auto card p-4 shadow-lg border-0" style={{width: '500px'}}>
-            <h4 className="mb-4 text-center fw-bold">"{activeSub?.name}" uchun savol</h4>
+            <h4 className="mb-4 text-center fw-bold">"{activeSub?.name}"</h4>
             <input type="text" className="form-control mb-3" placeholder="Savol matni" value={newQ.text} onChange={e => setNewQ({...newQ, text: e.target.value})} />
             {newQ.options.map((opt, i) => (
               <div key={i} className="input-group mb-2">
@@ -306,19 +309,19 @@ export default function App() {
                 </div>
               </div>
             ))}
-            <button className="btn btn-success w-100 mt-4 py-2 fw-bold" onClick={handleAddQuestion}>BAZAGA SAQLASH</button>
-            <button className="btn btn-link w-100 mt-2 text-muted" onClick={() => setView('teacher')}>Orqaga qaytish</button>
+            <button className="btn btn-success w-100 mt-4" onClick={handleAddQuestion}>SAQLASH</button>
+            <button className="btn btn-link w-100 mt-2" onClick={() => setView('teacher')}>Orqaga</button>
           </div>
         )}
 
         {/* --- STUDENT JOIN --- */}
         {view === 'student_name' && (
           <div className="m-auto card p-5 shadow-lg border-0 text-center" style={{ width: '420px', borderRadius: '25px'}}>
-            <h2 className="fw-bold mb-4">O'quvchi kirishi</h2>
-            <input type="text" className="form-control mb-3 text-center py-2" placeholder="Ismingizni yozing" value={playerName} onChange={e => setPlayerName(e.target.value)} />
-            <input type="text" className="form-control mb-4 text-center fs-3 py-2" placeholder="PIN-KOD" maxLength="6" value={inputPin} onChange={e => setInputPin(e.target.value)} />
-            <button className="btn btn-success btn-lg w-100 fw-bold shadow" onClick={joinGame}>O'YINGA KIRISH</button>
-            <button className="btn btn-link mt-3 text-muted" onClick={() => setView('auth')}>Orqaga</button>
+            <h2 className="fw-bold mb-4">O'quvchi</h2>
+            <input type="text" className="form-control mb-3 text-center" placeholder="Ismingiz" value={playerName} onChange={e => setPlayerName(e.target.value)} />
+            <input type="text" className="form-control mb-4 text-center fs-3" placeholder="PIN" maxLength="6" value={inputPin} onChange={e => setInputPin(e.target.value)} />
+            <button className="btn btn-success btn-lg w-100 shadow" onClick={joinGame}>KIRISH</button>
+            <button className="btn btn-link mt-2" onClick={() => setView('auth')}>Orqaga</button>
           </div>
         )}
 
@@ -326,37 +329,76 @@ export default function App() {
         {view === 'lobby' && (
           <div className="container-fluid h-100 d-flex flex-column text-center text-white" style={{backgroundColor: lightPrimary}}>
             <h1 className="display-1 fw-bold mt-5">{generatedPin}</h1>
-            <p className="fs-2 mb-5 opacity-75">O'yin PIN-kodi</p>
+            <p className="fs-2 mb-5">O'yin kodi</p>
             <div className="flex-grow-1 p-5">
               <div className="row g-4 justify-content-center">
-                {players.length === 0 ? <p className="fs-4">O'quvchilar kutilmoqda...</p> : 
+                {players.length === 0 ? <p className="fs-4">Kutilmoqda...</p> : 
                   players.map((p, i) => (
-                  <div key={i} className="col-md-3"><div className="card p-3 bg-white text-dark fw-bold fs-4 rounded-pill shadow-lg border-0">{p}</div></div>
+                  <div key={i} className="col-md-3">
+                    <div className="card p-3 fw-bold rounded-pill shadow border-0" 
+                         style={{ backgroundColor: '#ffffff', color: '#212529' }}>
+                      {p}
+                    </div>
+                  </div>
                 ))}
               </div>
             </div>
             {!playerName && (
               <div className="pb-5">
-                <button className="btn btn-light btn-xl px-5 py-3 fs-3 shadow-lg fw-bold rounded-pill" onClick={startActualGame}>O'YINNI BOSHLASH</button>
+                <button className="btn btn-light btn-xl px-5 py-3 fs-3 shadow-lg fw-bold rounded-pill" onClick={startActualGame}>BOSHLASH</button>
               </div>
             )}
-            {playerName && <p className="fs-3 pb-5">O'qituvchi o'yinni boshlashini kuting...</p>}
+            {playerName && <p className="fs-3 pb-5">O'qituvchini kuting...</p>}
           </div>
         )}
 
-        {/* --- QUIZ MODE --- */}
+        {/* --- QUIZ MODE (LIVE SCORES QO'SHILDI) --- */}
         {view === 'quiz_mode' && activeSub && (
-          <div className="container py-5 text-center">
-            <div className="badge bg-danger mb-4 fs-4 px-4 py-2 rounded-pill">Vaqt: {timer}</div>
-            <h2 className="display-4 fw-bold mb-5">{activeSub.questions[currentQIndex]?.text}</h2>
-            <div className="row g-4">
-              {activeSub.questions[currentQIndex]?.options.map((opt, i) => (
-                <div className="col-md-6" key={i}>
-                  <button className="btn btn-outline-primary btn-lg w-100 py-4 fs-2 fw-bold shadow-sm" onClick={() => handleAnswer(i === activeSub.questions[currentQIndex].correct)}>
-                    {opt}
-                  </button>
+          <div className="container py-4">
+            <div className="row">
+              <div className={!playerName ? "col-md-8" : "col-md-12"}>
+                <div className="text-center">
+                  <div className="badge bg-danger mb-4 fs-4 px-4 py-2 rounded-pill">Vaqt: {timer}</div>
+                  <h2 className="display-5 fw-bold mb-5">{activeSub.questions[currentQIndex]?.text}</h2>
+                  
+                  {playerName && (
+                    <div className="row g-4">
+                      {activeSub.questions[currentQIndex]?.options.map((opt, i) => (
+                        <div className="col-md-6" key={i}>
+                          <button className="btn btn-outline-primary btn-lg w-100 py-4 fs-2 fw-bold shadow-sm" 
+                            onClick={() => handleAnswer(i === activeSub.questions[currentQIndex].correct)}>
+                            {opt}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {!playerName && (
+                    <div className="alert alert-light border shadow-sm fs-4 py-5">
+                      🚀 O'yin ketmoqda... O'quvchilar javob bermoqda.
+                    </div>
+                  )}
                 </div>
-              ))}
+              </div>
+
+              {/* O'QITUVCHI UCHUN JONLI BALLAR JADVALI */}
+              {!playerName && (
+                <div className="col-md-4">
+                  <div className="card shadow-sm border-0 p-3 h-100" style={{borderRadius: '20px'}}>
+                    <h3 className="fw-bold mb-4 text-center">Live Ballar 📊</h3>
+                    <div className="list-group overflow-auto" style={{maxHeight: '400px'}}>
+                      {Object.entries(liveScores)
+                        .sort(([,a], [,b]) => b - a)
+                        .map(([name, scoreVal]) => (
+                          <div key={name} className="list-group-item d-flex justify-content-between align-items-center mb-2 rounded shadow-sm border-0" style={{backgroundColor: '#f8f9fa', color: '#333'}}>
+                            <span className="fw-bold text-capitalize">{name}</span>
+                            <span className="badge bg-primary rounded-pill fs-6">{scoreVal} ball</span>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -365,8 +407,8 @@ export default function App() {
         {view === 'results' && (
           <div className="m-auto text-center p-5 card shadow-lg border-0" style={{borderRadius: '25px'}}>
             <h1 className="display-1 fw-bold text-success mb-4">TAMOM!</h1>
-            <h3 className="mb-4">Sizning balingiz: <span className="text-primary">{score}</span></h3>
-            <button className="btn btn-primary btn-lg px-5 fw-bold" onClick={() => { setView('auth'); setScore(0); setGeneratedPin(''); }}>BOSH SAHIFA</button>
+            <h3 className="mb-4">Balingiz: <span className="text-primary">{score}</span></h3>
+            <button className="btn btn-primary btn-lg px-5 fw-bold" onClick={goBackHome}>ASOSIY SAHIFAGA QAYTISH</button>
           </div>
         )}
       </div>
