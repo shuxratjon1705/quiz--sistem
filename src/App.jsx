@@ -1,13 +1,25 @@
 import React, { useState, useEffect } from 'react';
 import 'bootstrap/dist/css/bootstrap.min.css';
 import './App.css';
-import { db } from './firebase'; // Firebase ulanish faylingiz
+import { db, auth } from './firebase'; 
 import { ref, onValue, set, push, remove, update } from "firebase/database";
+import { 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  onAuthStateChanged, 
+  signOut 
+} from "firebase/auth";
 
 export default function App() {
-  // --- HOLATLAR ---
+  // --- AUTH STATES ---
+  const [user, setUser] = useState(null);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [isSignUp, setIsSignUp] = useState(false);
+
+  // --- APP STATES ---
   const [subjects, setSubjects] = useState([]);
-  const [view, setView] = useState('landing');
+  const [view, setView] = useState('auth'); 
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [activeSubId, setActiveSubId] = useState(null);
   const [generatedPin, setGeneratedPin] = useState('');
@@ -20,7 +32,16 @@ export default function App() {
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [timer, setTimer] = useState(0);
 
-  // --- FIREBASE'DAN FANLARNI VA O'YIN HOLATINI O'QISH ---
+  // --- AUTH OBSERVER ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) setView('teacher');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- DATABASE DATA ---
   useEffect(() => {
     const subjectsRef = ref(db, 'subjects');
     onValue(subjectsRef, (snapshot) => {
@@ -31,13 +52,18 @@ export default function App() {
           ...data[key],
           questions: data[key].questions ? Object.values(data[key].questions) : []
         }));
-        setSubjects(list);
+        
+        // Faqat kirgan o'qituvchining fanlarini ko'rsatish
+        if (user) {
+          setSubjects(list.filter(s => s.ownerId === user.uid));
+        } else {
+          setSubjects([]);
+        }
       } else {
         setSubjects([]);
       }
     });
 
-    // O'yin PIN va o'quvchilarni kuzatish (Lobby uchun)
     if (generatedPin) {
       const gameRef = ref(db, `games/${generatedPin}`);
       onValue(gameRef, (snapshot) => {
@@ -45,18 +71,82 @@ export default function App() {
         if (data) {
           if (data.players) setPlayers(Object.values(data.players));
           if (data.status === 'started' && view === 'lobby' && playerName) {
-            startActualGame(); // O'quvchi uchun o'yinni boshlash
+            startActualGame();
           }
         }
       });
     }
-  }, [generatedPin, view]);
+  }, [generatedPin, view, user]);
 
-  // --- FUNKSIYALAR ---
+  // --- LOGIN / REGISTER LOGIC ---
+  // --- LOGIN / REGISTER LOGIC (YANGILANGAN) ---
+  const handleAuth = async () => {
+    if (!username || !password) {
+      alert("Iltimos, username va parolni to'liq yozing!");
+      return;
+    }
+    
+    // Username-ni tozalash va email formatiga keltirish
+    const cleanUsername = username.trim().toLowerCase();
+    const virtualEmail = `${cleanUsername}@quiz.com`;
+
+    try {
+      if (isSignUp) {
+        // RO'YXATDAN O'TISH
+        await createUserWithEmailAndPassword(auth, virtualEmail, password);
+        alert("Tabriklaymiz! Akkaunt ochildi.");
+        // Ro'yxatdan o'tgach, onAuthStateChanged uni avtomatik 'teacher'ga o'tkazadi
+      } else {
+        // KIRISH
+        await signInWithEmailAndPassword(auth, virtualEmail, password);
+        // Kirish muvaffaqiyatli bo'lsa, avtomatik 'teacher'ga o'tadi
+      }
+    } catch (err) {
+      console.error("Auth Error:", err.code);
+      
+      // Foydalanuvchi uchun tushunarli xabarlar
+      switch (err.code) {
+        case 'auth/invalid-credential':
+          alert("Username yoki parol xato! Iltimos, qaytadan tekshiring.");
+          break;
+        case 'auth/user-not-found':
+          alert("Bunday foydalanuvchi topilmadi. Avval ro'yxatdan o'ting.");
+          break;
+        case 'auth/wrong-password':
+          alert("Parol noto'g'ri!");
+          break;
+        case 'auth/email-already-in-use':
+          alert("Bu username allaqachon band! Boshqa username tanlang.");
+          break;
+        case 'auth/weak-password':
+          alert("Parol juda oddiy! Kamida 6 ta belgi bo'lishi kerak.");
+          break;
+        case 'auth/invalid-email':
+          alert("Username formatida xatolik bor.");
+          break;
+        default:
+          alert("Xatolik yuz berdi: " + err.message);
+      }
+    }
+  };
+
+  // --- LOGOUT ---
+  const handleLogout = () => {
+    signOut(auth);
+    setView('auth');
+    setUsername('');
+    setPassword('');
+  };
+
+  // --- SUBJECTS LOGIC ---
   const addSubject = () => {
-    if (newSubName.trim()) {
+    if (newSubName.trim() && user) {
       const subjectsRef = ref(db, 'subjects');
-      push(subjectsRef, { name: newSubName, questions: [] });
+      push(subjectsRef, { 
+        name: newSubName, 
+        questions: [], 
+        ownerId: user.uid // Fan egasini biriktirish
+      });
       setNewSubName('');
     }
   };
@@ -67,20 +157,16 @@ export default function App() {
       const autoTime = Math.max(15, Math.floor(newQ.text.length / 5) * 2);
       push(questionsRef, { ...newQ, id: Date.now(), time: autoTime });
       setNewQ({ text: '', options: ['', '', '', ''], correct: 0 });
-      alert("Savol bazaga qo'shildi!");
+      alert("Savol saqlandi!");
     }
   };
 
+  // --- GAME LOGIC ---
   const startLobby = (subId) => {
     const pin = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedPin(pin);
     setActiveSubId(subId);
-    // Bazada yangi o'yin seansini yaratish
-    set(ref(db, `games/${pin}`), {
-      subjectId: subId,
-      status: 'waiting',
-      players: {}
-    });
+    set(ref(db, `games/${pin}`), { subjectId: subId, status: 'waiting', players: {} });
     setView('lobby');
   };
 
@@ -90,14 +176,13 @@ export default function App() {
       onValue(gameRef, (snapshot) => {
         const data = snapshot.val();
         if (data) {
-          // O'zini o'yinchi sifatida qo'shish
           const newPlayerRef = push(ref(db, `games/${inputPin}/players`));
           set(newPlayerRef, playerName);
           setGeneratedPin(inputPin);
           setActiveSubId(data.subjectId);
           setView('lobby');
         } else {
-          alert("Bunday PIN topilmadi!");
+          alert("PIN xato!");
         }
       }, { onlyOnce: true });
     }
@@ -106,12 +191,7 @@ export default function App() {
   const startActualGame = () => {
     const sub = subjects.find(s => s.id === activeSubId);
     if (!sub) return;
-    
-    // Agar o'qituvchi bo'lsa, bazada statusni o'zgartiradi
-    if (!playerName) {
-      update(ref(db, `games/${generatedPin}`), { status: 'started' });
-    }
-    
+    if (!playerName) update(ref(db, `games/${generatedPin}`), { status: 'started' });
     setCurrentQIndex(0);
     setTimer(sub.questions[0].time);
     setView('quiz_mode');
@@ -141,48 +221,69 @@ export default function App() {
 
   const activeSub = subjects.find(s => s.id === activeSubId);
   const lightPrimary = "#8C9460";
-  const lightBg = "#ffffff";
 
   return (
-    <div className={`vh-100 d-flex flex-column ${isDarkMode ? 'bg-dark text-white' : ''}`} 
-         style={{ overflow: 'hidden', backgroundColor: isDarkMode ? '' : lightBg, color: isDarkMode ? '' : '#333' }}>
+    <div className="vh-100 d-flex flex-column" data-bs-theme={isDarkMode ? 'dark' : 'light'} style={{ overflow: 'hidden' }}>
       
+      {/* --- NAVBAR --- */}
       <nav className="navbar px-4 flex-shrink-0 shadow" style={{ height: '65px', backgroundColor: isDarkMode ? '#000' : lightPrimary }}>
-        <span className="navbar-brand fw-bold text-white" onClick={() => setView('landing')} style={{ cursor: 'pointer' }}>QUIZ MASTER</span>
-        <button className={`btn btn-sm ${isDarkMode ? 'btn-outline-info' : 'btn-outline-light rounded-pill px-3'}`} onClick={() => setIsDarkMode(!isDarkMode)}>
-          {isDarkMode ? '🌙 Dark Mode' : '☀️ Light Mode'}
-        </button>
+        <span className="navbar-brand fw-bold text-white" onClick={() => setView(user ? 'teacher' : 'auth')} style={{ cursor: 'pointer' }}>QUIZ MASTER</span>
+        <div className="d-flex gap-2">
+          {user && <button className="btn btn-sm btn-danger" onClick={handleLogout}>Chiqish</button>}
+          <button className="btn btn-sm btn-outline-light rounded-pill px-3" onClick={() => setIsDarkMode(!isDarkMode)}>
+            {isDarkMode ? '☀️ Light' : '🌙 Dark'}
+          </button>
+        </div>
       </nav>
 
-      <div className="flex-grow-1 overflow-auto d-flex flex-column">
-        {view === 'landing' && (
-          <div className="m-auto text-center">
-            <h1 className="display-1 fw-bold mb-4" style={{color: isDarkMode ? '' : lightPrimary}}>Bilimlar jangi</h1>
-            <div className="d-flex gap-4 justify-content-center">
-              <button className="btn btn-lg px-5 py-3 shadow-lg fw-bold" style={{backgroundColor: isDarkMode ? '#0d6efd' : lightPrimary, color: '#fff', border: 'none'}} onClick={() => setView('teacher')}>👨‍🏫 O'QITUVCHI</button>
-              <button className="btn btn-success btn-lg px-5 py-3 shadow-lg fw-bold" onClick={() => setView('student_name')}>🎓 O'QUVCHI</button>
+      <div className="flex-grow-1 overflow-auto d-flex flex-column position-relative">
+        
+        {/* --- LOGIN / SIGN UP OYNASI --- */}
+        {view === 'auth' && (
+          <div className="m-auto card p-4 shadow-lg border-0" style={{width: '380px', borderRadius: '20px'}}>
+            <h2 className="text-center fw-bold mb-4">{isSignUp ? 'Sign Up' : 'Sign In'}</h2>
+            <input type="text" className="form-control mb-3" placeholder="Username" value={username} onChange={e => setUsername(e.target.value)} />
+            <input type="password" className="form-control mb-4" placeholder="Parol" value={password} onChange={e => setPassword(e.target.value)} />
+            
+            <button className="btn btn-primary w-100 py-2 fw-bold mb-3 shadow-sm" onClick={handleAuth}>
+              {isSignUp ? 'RO‘YXATDAN O‘TISH' : 'KIRISH'}
+            </button>
+
+            <div className="text-center mb-3">
+              <button className="btn btn-link btn-sm text-decoration-none" onClick={() => setIsSignUp(!isSignUp)}>
+                {isSignUp ? "Akkauntingiz bormi? Sign In" : "Yangi akkaunt? Sign Up"}
+              </button>
+            </div>
+
+            <div className="border-top pt-3 text-center">
+              <button className="btn btn-outline-success rounded-pill w-100 fw-bold" onClick={() => setView('student_name')}>
+                👨‍🎓 Men o'quvchiman
+              </button>
             </div>
           </div>
         )}
 
-        {view === 'teacher' && (
+        {/* --- TEACHER VIEW --- */}
+        {view === 'teacher' && user && (
           <div className="container py-5">
             <h2 className="fw-bold mb-4 border-bottom pb-2">Mening Fanlarim (Baza)</h2>
-            <div className="input-group mb-5 shadow">
-              <input type="text" className="form-control form-control-lg" placeholder="Yangi fan nomi..." value={newSubName} onChange={e => setNewSubName(e.target.value)} />
-              <button className="btn px-4 fw-bold text-white" style={{backgroundColor: lightPrimary}} onClick={addSubject}>+ Qo'shish</button>
+            <div className="input-group mb-5 shadow rounded overflow-hidden">
+              <input type="text" className="form-control form-control-lg border-0" placeholder="Yangi fan nomi..." value={newSubName} onChange={e => setNewSubName(e.target.value)} />
+              <button className="btn px-4 fw-bold text-white border-0" style={{backgroundColor: lightPrimary}} onClick={addSubject}>+ Qo'shish</button>
             </div>
             <div className="row g-4">
               {subjects.map(s => (
                 <div key={s.id} className="col-md-4">
-                  <div className="card h-100 p-4 shadow border-0" style={{borderRadius: '15px', backgroundColor: isDarkMode ? '#2b3035' : '#f8f9fa'}}>
-                    <div className="d-flex justify-content-between">
-                      <h3 className={`fw-bold ${isDarkMode ? 'text-white' : 'text-dark'}`}>{s.name}</h3>
-                      <button className="btn btn-sm btn-danger rounded-circle" onClick={() => remove(ref(db, `subjects/${s.id}`))}>×</button>
+                  <div className="card h-100 p-4 shadow border-0" style={{borderRadius: '15px'}}>
+                    <div className="d-flex justify-content-between align-items-start mb-2">
+                      <h3 className="fw-bold mb-0">{s.name}</h3>
+                      <button className="btn btn-danger btn-sm rounded-circle" style={{width: '30px', height: '30px', padding: '0'}} onClick={() => remove(ref(db, `subjects/${s.id}`))}>×</button>
                     </div>
                     <p className="text-muted mb-4">Savollar: {s.questions.length}</p>
-                    <button className="btn btn-outline-primary mb-3 py-2 fw-bold" onClick={() => { setActiveSubId(s.id); setView('add_questions'); }}>Savollar tuzish</button>
-                    <button className="btn btn-danger w-100 py-2 fw-bold shadow-sm" onClick={() => startLobby(s.id)}>LIVE START</button>
+                    <div className="mt-auto">
+                      <button className="btn btn-outline-primary w-100 mb-3 py-2 fw-bold" onClick={() => { setActiveSubId(s.id); setView('add_questions'); }}>Savollar tuzish</button>
+                      <button className="btn btn-danger w-100 py-2 fw-bold shadow-sm" onClick={() => startLobby(s.id)}>LIVE START</button>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -190,8 +291,9 @@ export default function App() {
           </div>
         )}
 
+        {/* --- ADD QUESTIONS --- */}
         {view === 'add_questions' && (
-          <div className="m-auto card p-4 shadow-lg border-0" style={{width: '500px', backgroundColor: isDarkMode ? '#2b3035' : '#fff'}}>
+          <div className="m-auto card p-4 shadow-lg border-0" style={{width: '500px'}}>
             <h4 className="mb-4 text-center fw-bold">"{activeSub?.name}" uchun savol</h4>
             <input type="text" className="form-control mb-3" placeholder="Savol matni" value={newQ.text} onChange={e => setNewQ({...newQ, text: e.target.value})} />
             {newQ.options.map((opt, i) => (
@@ -209,15 +311,18 @@ export default function App() {
           </div>
         )}
 
+        {/* --- STUDENT JOIN --- */}
         {view === 'student_name' && (
-          <div className="m-auto card p-5 shadow-lg border-0 text-center" style={{ width: '420px', borderRadius: '25px', backgroundColor: isDarkMode ? '#2b3035' : '#fff' }}>
-            <h2 className="fw-bold mb-4">Kirish</h2>
+          <div className="m-auto card p-5 shadow-lg border-0 text-center" style={{ width: '420px', borderRadius: '25px'}}>
+            <h2 className="fw-bold mb-4">O'quvchi kirishi</h2>
             <input type="text" className="form-control mb-3 text-center py-2" placeholder="Ismingizni yozing" value={playerName} onChange={e => setPlayerName(e.target.value)} />
             <input type="text" className="form-control mb-4 text-center fs-3 py-2" placeholder="PIN-KOD" maxLength="6" value={inputPin} onChange={e => setInputPin(e.target.value)} />
-            <button className="btn btn-success btn-lg w-100 fw-bold shadow" onClick={joinGame}>KIRISH</button>
+            <button className="btn btn-success btn-lg w-100 fw-bold shadow" onClick={joinGame}>O'YINGA KIRISH</button>
+            <button className="btn btn-link mt-3 text-muted" onClick={() => setView('auth')}>Orqaga</button>
           </div>
         )}
 
+        {/* --- LOBBY --- */}
         {view === 'lobby' && (
           <div className="container-fluid h-100 d-flex flex-column text-center text-white" style={{backgroundColor: lightPrimary}}>
             <h1 className="display-1 fw-bold mt-5">{generatedPin}</h1>
@@ -239,6 +344,7 @@ export default function App() {
           </div>
         )}
 
+        {/* --- QUIZ MODE --- */}
         {view === 'quiz_mode' && activeSub && (
           <div className="container py-5 text-center">
             <div className="badge bg-danger mb-4 fs-4 px-4 py-2 rounded-pill">Vaqt: {timer}</div>
@@ -255,11 +361,12 @@ export default function App() {
           </div>
         )}
 
+        {/* --- RESULTS --- */}
         {view === 'results' && (
-          <div className="m-auto text-center p-5 card shadow-lg border-0" style={{borderRadius: '25px', backgroundColor: isDarkMode ? '#2b3035' : '#fff'}}>
+          <div className="m-auto text-center p-5 card shadow-lg border-0" style={{borderRadius: '25px'}}>
             <h1 className="display-1 fw-bold text-success mb-4">TAMOM!</h1>
             <h3 className="mb-4">Sizning balingiz: <span className="text-primary">{score}</span></h3>
-            <button className="btn btn-primary btn-lg px-5 fw-bold" onClick={() => { setView('landing'); setScore(0); setGeneratedPin(''); }}>BOSH SAHIFA</button>
+            <button className="btn btn-primary btn-lg px-5 fw-bold" onClick={() => { setView('auth'); setScore(0); setGeneratedPin(''); }}>BOSH SAHIFA</button>
           </div>
         )}
       </div>
@@ -271,15 +378,10 @@ export default function App() {
               <h5 className="fw-bold mb-1 text-white">Shuxratjon</h5>
               <p className="small mb-0 opacity-75">Dasturchi va loyiha asoschisi</p>
             </div>
-            <div className="col-md-4 text-center">
-              <a href="mailto:shuxratjonmaxmutjanov514@gmail.com" className="text-white text-decoration-none small fw-bold">shuxratjonmaxmutjanov514@gmail.com</a>
-            </div>
-            <div className="col-md-4 text-center text-md-end small opacity-75">&copy; 2026 QUIZ MASTER. Barcha huquqlar himoyalangan.</div>
+            <div className="col-md-4 text-center text-md-end small opacity-75">&copy; 2026 QUIZ MASTER.</div>
           </div>
         </div>
       </footer>
     </div>
   );
 }
-
-
