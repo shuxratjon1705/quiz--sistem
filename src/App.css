@@ -38,6 +38,40 @@ body {
   color: var(--text-color);
   background-color: var(--bg-color);
 }
+/* --- MODERN & MINIMAL SCROLLBAR --- */
+
+/* 1. Scrollbar yo'lagini butunlay shaffof qilish */
+::-webkit-scrollbar {
+  width: 6px; /* Juda ingichka va chiroyli */
+}
+
+/* 2. Yo'lakcha (track) - orqa fon bilan qorishib ketadi */
+::-webkit-scrollbar-track {
+  background: transparent; 
+}
+
+/* 3. Harakatlanuvchi qism (thumb) - yarim shaffof "shisha" effekti */
+::-webkit-scrollbar-thumb {
+  background: rgba(140, 148, 96, 0.4); /* Asosiy rangingiz, lekin 40% shaffof */
+  border-radius: 50px; /* To'liq yumaloq */
+  transition: all 0.3s ease;
+}
+
+/* 4. Sichqoncha yaqinlashganda yanada aniqroq ko'rinishi */
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(140, 148, 96, 0.8); /* 80% ko'rinish */
+}
+
+/* 5. Scroll ustida bosib turganda */
+::-webkit-scrollbar-thumb:active {
+  background: #8C9460; /* To'liq rang */
+}
+
+/* Firefox uchun moslashuv */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(140, 148, 96, 0.5) transparent;
+}
 
 
 /* import './App.css'; */
