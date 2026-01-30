@@ -1,14 +1,55 @@
 .selected-mode {
-    box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
-    transform: translateY(-2px);
-  }
-  
-  .transition-all {
-    transition-property: all;
-    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-    transition-duration: 300ms;
-  }
-  
-  .card {
-    border-radius: 12px !important;
-  }
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04) !important;
+  transform: translateY(-2px);
+  border: 3px solid !important;
+}
+
+.transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 300ms;
+}
+
+.card {
+  border-radius: 12px !important;
+}
+
+/* Heart animation for survival mode */
+.heart {
+  transition: all 0.3s ease;
+}
+
+.heart.active {
+  animation: heartbeat 1.5s ease infinite;
+}
+
+.heart.inactive {
+  opacity: 0.5;
+  transform: scale(0.8);
+}
+
+@keyframes heartbeat {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+
+/* Marathon progress animation */
+.marathon-progress {
+  animation: marathonGlow 2s infinite alternate;
+}
+
+@keyframes marathonGlow {
+  from { box-shadow: 0 0 10px #198754; }
+  to { box-shadow: 0 0 20px #198754; }
+}
+
+/* Blitz mode timer animation */
+.blitz-timer {
+  animation: blitzPulse 0.5s infinite alternate;
+}
+
+@keyframes blitzPulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.1); }
+}
