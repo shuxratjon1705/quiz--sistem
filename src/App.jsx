@@ -23,12 +23,12 @@ import {
   FiCheck, FiX, FiClock, FiAward, FiTrendingUp,
   FiChevronRight, FiChevronLeft, FiPlay, FiPause,
   FiFastForward, FiStar, FiUsers, FiTarget,
-  FiSettings, FiGrid
+  FiSettings, FiGrid, FiRefreshCw, FiShuffle
 } from 'react-icons/fi';
 import { 
   GiTrophy, GiBrain, GiLightningHelix, GiRunningNinja,
   GiSurprisedSkull, GiTeacher, GiGraduateCap,
-  GiHeartPlus, GiHeartMinus
+  GiHeartPlus, GiHeartMinus, GiPerspectiveDiceSixFacesRandom
 } from 'react-icons/gi';
 
 export default function App() {
@@ -85,7 +85,12 @@ export default function App() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [achievements, setAchievements] = useState([]);
   const [themeColor, setThemeColor] = useState('#8C9460'); // Asosiy rang
-  const [themeColors] = useState(['#8C9460', '#6C63FF', '#FF6584', '#36D1DC', '#FFB347', '#9C27B0', '#4CAF50', '#FF5722', '#2196F3', '#FF9800']);
+  const [themeColors] = useState([
+    '#8C9460', '#6C63FF', '#FF6584', '#36D1DC', '#FFB347', 
+    '#9C27B0', '#4CAF50', '#FF5722', '#2196F3', '#FF9800',
+    '#673AB7', '#00BCD4', '#E91E63', '#009688', '#FFC107',
+    '#795548', '#CDDC39', '#FF9800', '#9E9E9E', '#3F51B5'
+  ]);
   const [pulseAnimation, setPulseAnimation] = useState(false);
   const [backgroundStyle, setBackgroundStyle] = useState('gradient');
   const [showBgModal, setShowBgModal] = useState(false);
@@ -109,8 +114,80 @@ export default function App() {
   const [newSubName, setNewSubName] = useState('');
   const [currentQIndex, setCurrentQIndex] = useState(0);
   const [timer, setTimer] = useState(0);
+  
+  // ===== TUZATILGAN STATELAR =====
+  const [shuffledQuestions, setShuffledQuestions] = useState([]); // ⭐ YANGI: Aralashtirilgan savollar
+  const [usedQuestionIds, setUsedQuestionIds] = useState(new Set()); // ⭐ YANGI: Ishlatilgan savollar
+  const [allQuestionsAnswered, setAllQuestionsAnswered] = useState(false); // ⭐ YANGI: Barcha savol javoblanganmi
+  const [currentShuffledIndex, setCurrentShuffledIndex] = useState(0); // ⭐ YANGI: Joriy aralashtirilgan indeks
+
+  // ===== ASOSIY OZGARUVCHI - BU YERDA E'LON QILINDI =====
+  const activeSub = subjects.find(s => s.id === activeSubId);
 
   // ===== YANGI FUNKSIYALAR =====
+
+  // ⭐⭐ YANGI VA ASOSIY TUZATISH: Savol va uning variantlarini BIRGA aralashtirish ⭐⭐
+  const shuffleQuestionWithOptions = (question) => {
+    if (!question) return null;
+    
+    // 1. Variantlarni nusxa olish
+    const originalOptions = [...question.options];
+    const originalCorrect = question.correct;
+    
+    // 2. Variantlar va ularning indekslarini massivga olish
+    const optionsWithIndex = originalOptions.map((option, index) => ({ option, index }));
+    
+    // 3. Variantlarni aralashtirish
+    for (let i = optionsWithIndex.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [optionsWithIndex[i], optionsWithIndex[j]] = [optionsWithIndex[j], optionsWithIndex[i]];
+    }
+    
+    // 4. Yangi variantlar massivi va to'g'ri javob indeksini topish
+    const newOptions = optionsWithIndex.map(item => item.option);
+    const newCorrectIndex = optionsWithIndex.findIndex(item => item.index === originalCorrect);
+    
+    // 5. Yangi savol obyektini yaratish
+    return {
+      ...question,
+      id: question.id || Date.now(), // Har bir savolga unique ID
+      options: newOptions,
+      correct: newCorrectIndex,
+      originalCorrect: originalCorrect,
+      originalOptions: originalOptions, // Asl variantlarni saqlash
+      isShuffled: true
+    };
+  };
+
+  // Savollarni aralashtirish funksiyasi (YANGILANDI)
+  const shuffleQuestions = (questions) => {
+    if (!questions || questions.length === 0) return [];
+    
+    // 1. Savollarga ID berish
+    const questionsWithIds = questions.map((q, index) => ({
+      ...q,
+      id: q.id || `q_${Date.now()}_${index}`, // Unique ID
+      originalIndex: index // Asl indeksni saqlash
+    }));
+    
+    // 2. Savollarni aralashtirish
+    const shuffled = [...questionsWithIds];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    
+    // 3. Har bir savolning variantlarini alohida aralashtirish
+    const fullyShuffled = shuffled.map(q => shuffleQuestionWithOptions(q));
+    
+    console.log("✅ Savollar to'liq aralashtirildi:", fullyShuffled.map(q => ({ 
+      text: q.text.substring(0, 50), 
+      correct: q.correct,
+      optionsCount: q.options.length 
+    })));
+    
+    return fullyShuffled;
+  };
 
   // Rejimlarga mos vaqtni olish
   const getModeTime = (mode) => {
@@ -197,24 +274,28 @@ export default function App() {
 
   // Marathon rejimi uchun yangi savollar generatsiya qilish
   const generateMarathonQuestion = () => {
-    if (quizMode !== 'marathon' || !activeSub) return;
+    if (quizMode !== 'marathon' || !activeSub) return null;
     
     const baseQuestions = activeSub.questions || [];
-    if (baseQuestions.length === 0) return;
+    if (baseQuestions.length === 0) return null;
     
-    // Agar mavjud savollar tugasa, ularni aralashtirib qayta ishlatamiz
-    const randomIndex = questionCounter % baseQuestions.length;
+    // Random savol tanlash
+    const randomIndex = Math.floor(Math.random() * baseQuestions.length);
     const baseQuestion = {...baseQuestions[randomIndex]};
     
-    // Savolni yangilash (variantlar tartibini o'zgartirish)
-    const shuffledOptions = [...baseQuestion.options].sort(() => Math.random() - 0.5);
-    const newCorrectIndex = shuffledOptions.indexOf(baseQuestion.options[baseQuestion.correct]);
+    // Savolni to'liq aralashtirish
+    const shuffledQuestion = shuffleQuestionWithOptions({
+      ...baseQuestion,
+      id: `marathon_${Date.now()}_${questionCounter}`,
+      originalIndex: randomIndex
+    });
+    
+    if (!shuffledQuestion) return null;
     
     const newQuestion = {
-      ...baseQuestion,
-      options: shuffledOptions,
-      correct: newCorrectIndex,
-      marathonId: questionCounter
+      ...shuffledQuestion,
+      marathonId: questionCounter,
+      marathonNumber: questionCounter + 1
     };
     
     setMarathonQuestions(prev => [...prev, newQuestion]);
@@ -230,6 +311,10 @@ export default function App() {
     setSurvivalLives(3);
     setMarathonQuestions([]);
     setQuestionCounter(0);
+    setShuffledQuestions([]);
+    setUsedQuestionIds(new Set());
+    setAllQuestionsAnswered(false);
+    setCurrentShuffledIndex(0);
     
     // Taymerni yangilash
     if (activeSub && view === 'quiz_mode') {
@@ -387,7 +472,7 @@ export default function App() {
     if (view === 'quiz_mode' || view === 'results') {
       checkAchievements();
     }
-  }, [streak, score, correctAnswers.length, survivalLives, questionCounter]);
+  }, [streak, score, correctAnswers.length, survivalLives, questionCounter, quizMode, activeSub]);
 
   // --- PULSE ANIMATION ---
   useEffect(() => {
@@ -397,6 +482,20 @@ export default function App() {
       setPulseAnimation(false);
     }
   }, [timer]);
+
+  // --- Savollarni aralashtirish efekti (YANGILANDI) ---
+  useEffect(() => {
+    if (activeSub && activeSub.questions && view === 'quiz_mode' && !playerName) {
+      // Faqat o'qituvchi rejimida yoki o'yin boshida
+      if (shuffledQuestions.length === 0) {
+        console.log("🔄 Savollarni aralashtirish boshlandi...");
+        const shuffled = shuffleQuestions(activeSub.questions);
+        setShuffledQuestions(shuffled);
+        setCurrentShuffledIndex(0);
+        console.log(`✅ ${shuffled.length} ta savol aralashtirildi`);
+      }
+    }
+  }, [activeSub, view, playerName]);
 
   // --- AUTH OBSERVER ---
   useEffect(() => {
@@ -468,6 +567,11 @@ export default function App() {
               setView('quiz_mode');
               setQuestionStatus('active');
               notifyGameStart();
+              
+              // O'quvchi uchun ham savollarni aralashtirish
+              const shuffled = shuffleQuestions(currentSub.questions);
+              setShuffledQuestions(shuffled);
+              setCurrentShuffledIndex(0);
             }
           }
         }
@@ -521,6 +625,10 @@ export default function App() {
       setSurvivalLives(3);
       setMarathonQuestions([]);
       setQuestionCounter(0);
+      setShuffledQuestions([]);
+      setUsedQuestionIds(new Set());
+      setAllQuestionsAnswered(false);
+      setCurrentShuffledIndex(0);
     });
   };
 
@@ -543,6 +651,11 @@ export default function App() {
     setSurvivalLives(3);
     setMarathonQuestions([]);
     setQuestionCounter(0);
+    setShuffledQuestions([]);
+    setUsedQuestionIds(new Set());
+    setAllQuestionsAnswered(false);
+    setCurrentShuffledIndex(0);
+    setCurrentQIndex(0);
     
     if (user) setView('teacher');
     else setView('auth');
@@ -662,6 +775,16 @@ export default function App() {
       return;
     }
     
+    // Savollarni aralashtirish (YANGI LOGIKA)
+    console.log("🎮 O'yin boshlanmoqda...");
+    const shuffled = shuffleQuestions(sub.questions);
+    setShuffledQuestions(shuffled);
+    setCurrentShuffledIndex(0);
+    setUsedQuestionIds(new Set());
+    setAllQuestionsAnswered(false);
+    
+    console.log(`✅ ${shuffled.length} ta savol aralashtirildi`);
+    
     update(ref(db, `games/${generatedPin}`), { 
       status: 'started',
       mode: quizMode,
@@ -684,11 +807,68 @@ export default function App() {
     notifyGameStart();
   };
 
-  // --- JAVOB BERISH LOGIKASI ---
-  const handleAnswer = (isCorrect) => {
-    if (feedback) return;
+  // --- YANGI KEYINGI SAVOL FUNKSIYASI (TUZATILGAN) ---
+  const getNextQuestion = () => {
+    if (!activeSub || shuffledQuestions.length === 0) {
+      console.log("❌ Savollar mavjud emas");
+      return null;
+    }
+    
+    // Normal, Blitz, Survival rejimlari uchun
+    if (quizMode !== 'marathon') {
+      // Agar hamma savollar ishlatilgan bo'lsa
+      if (currentShuffledIndex >= shuffledQuestions.length) {
+        console.log("✅ Barcha savollar ishlatildi");
+        setAllQuestionsAnswered(true);
+        return null;
+      }
+      
+      // Keyingi aralashtirilgan savolni olish
+      const nextQuestion = shuffledQuestions[currentShuffledIndex];
+      console.log(`📝 Savol ${currentShuffledIndex + 1}/${shuffledQuestions.length}:`, 
+        nextQuestion.text.substring(0, 50) + "...");
+      
+      // Indeksni yangilash
+      setCurrentShuffledIndex(prev => prev + 1);
+      
+      return nextQuestion;
+    }
+    
+    // Marathon rejimi uchun yangi savol generatsiya qilish
+    if (quizMode === 'marathon') {
+      return generateMarathonQuestion();
+    }
+    
+    return null;
+  };
 
-    const activeSub = subjects.find(s => s.id === activeSubId);
+  // --- JAVOB BERISH LOGIKASI (YANGILANDI VA TUZATILGAN) ---
+  const handleAnswer = (isCorrect) => {
+    if (feedback || allQuestionsAnswered) return;
+
+    // ⭐⭐ MUHIM: Joriy savolni to'g'ri olish ⭐⭐
+    let currentQuestion;
+    if (quizMode === 'marathon') {
+      currentQuestion = marathonQuestions[questionCounter];
+    } else {
+      // Aralashtirilgan savollar ro'yxatidan joriy indeksdagi savol
+      const currentIndex = currentShuffledIndex - 1; // Chunki indeks allaqachon oshirilgan
+      if (currentIndex >= 0 && currentIndex < shuffledQuestions.length) {
+        currentQuestion = shuffledQuestions[currentIndex];
+      } else if (shuffledQuestions.length > 0) {
+        currentQuestion = shuffledQuestions[0];
+      }
+    }
+
+    if (!currentQuestion) {
+      console.error("❌ Joriy savol topilmadi!");
+      return;
+    }
+
+    console.log(`🤔 Javob tekshirilmoqda: ${isCorrect ? "To'g'ri" : "Noto'g'ri"}`);
+    console.log(`📊 Savol: ${currentQuestion.text.substring(0, 50)}...`);
+    console.log(`✅ To'g'ri javob indeksi: ${currentQuestion.correct}`);
+
     let newTotalScore = score;
 
     setFeedback(isCorrect ? 'correct' : 'wrong');
@@ -713,7 +893,7 @@ export default function App() {
       const newStreak = streak + 1;
       setStreak(newStreak);
 
-      let currentPoints = activeSub.questions[currentQIndex].points || 100;
+      let currentPoints = currentQuestion.points || 100;
       let bonusInfo = {};
       
       // Rejimlarga mos bonuslarni hisoblash
@@ -752,18 +932,18 @@ export default function App() {
       }
 
       setTimeBonuses(prev => [...prev, {
-        question: currentQIndex + 1,
-        bonus: currentPoints - (activeSub.questions[currentQIndex].points || 100),
+        question: (quizMode === 'marathon' ? questionCounter : currentShuffledIndex),
+        bonus: currentPoints - (currentQuestion.points || 100),
         message: bonusInfo.message || 'Bonus',
         type: quizMode
       }]);
 
       setCorrectAnswers(prev => [...prev, {
-        question: activeSub.questions[currentQIndex].text,
+        question: currentQuestion.text,
         points: currentPoints,
         time: new Date().toLocaleTimeString(),
-        difficulty: activeSub.questions[currentQIndex].difficulty || 'medium',
-        questionNumber: currentQIndex + 1,
+        difficulty: currentQuestion.difficulty || 'medium',
+        questionNumber: (quizMode === 'marathon' ? questionCounter + 1 : currentShuffledIndex),
         mode: quizMode
       }]);
 
@@ -777,9 +957,9 @@ export default function App() {
         
         const answerData = {
           playerName: playerName,
-          questionIndex: currentQIndex,
+          questionIndex: quizMode === 'marathon' ? questionCounter : currentShuffledIndex - 1,
           isCorrect: true,
-          timeSpent: activeSub.questions[currentQIndex].time - timer,
+          timeSpent: currentQuestion.time - timer,
           points: currentPoints,
           answeredAt: new Date().toISOString(),
           mode: quizMode
@@ -794,9 +974,9 @@ export default function App() {
       if (playerName && generatedPin) {
         const answerData = {
           playerName: playerName,
-          questionIndex: currentQIndex,
+          questionIndex: quizMode === 'marathon' ? questionCounter : currentShuffledIndex - 1,
           isCorrect: false,
-          timeSpent: activeSub.questions[currentQIndex].time - timer,
+          timeSpent: currentQuestion.time - timer,
           points: 0,
           answeredAt: new Date().toISOString(),
           mode: quizMode
@@ -809,26 +989,40 @@ export default function App() {
 
     setTimeout(() => {
       setFeedback(null);
+      
+      // Keyingi savolga o'tish
       if (quizMode === 'marathon') {
-        // Marathon rejimida keyingi savolga o'tish
+        // Marathon rejimida cheksiz davom etadi
         const nextQuestion = generateMarathonQuestion();
         if (nextQuestion) {
           setTimer(getModeTime('marathon'));
         }
-      } else if (currentQIndex + 1 < activeSub.questions.length) {
-        const nextIndex = currentQIndex + 1;
-        setCurrentQIndex(nextIndex);
-        setTimer(getModeTime(quizMode));
       } else {
-        saveGameHistory();
-        setView('results');
+        // Boshqa rejimlar uchun
+        const nextQuestion = getNextQuestion();
+        if (nextQuestion) {
+          setTimer(getModeTime(quizMode));
+        } else {
+          // Barcha savollar tugadi
+          console.log("🎯 Barcha savollar tugadi, natijalar sahifasiga o'tilmoqda...");
+          setTimeout(() => {
+            saveGameHistory();
+            setView('results');
+          }, 1000);
+        }
       }
     }, 1500);
   };
 
-  // --- O'QITUVCHI KEYINGI SAVOLGA O'TISH ---
+  // --- O'QITUVCHI KEYINGI SAVOLGA O'TISH (YANGILANDI) ---
   const goToNextQuestion = () => {
-    const activeSub = subjects.find(s => s.id === activeSubId);
+    // Agar barcha savollar tugagan bo'lsa
+    if (allQuestionsAnswered && quizMode !== 'marathon') {
+      console.log("🎯 Barcha savollar tugadi");
+      saveGameHistory();
+      setView('results');
+      return;
+    }
     
     if (quizMode === 'marathon') {
       // Marathon rejimi - cheksiz davom etadi
@@ -836,28 +1030,31 @@ export default function App() {
       if (nextQuestion) {
         setTimer(getModeTime('marathon'));
         setQuestionStatus('active');
+        setAnsweredCount(0);
       }
       return;
     }
     
-    if (currentQIndex + 1 < activeSub.questions.length) {
-      const nextIndex = currentQIndex + 1;
-      setCurrentQIndex(nextIndex);
+    // Normal, Blitz, Survival rejimlari uchun
+    const nextQuestion = getNextQuestion();
+    if (nextQuestion) {
       setTimer(getModeTime(quizMode));
       setQuestionStatus('active');
       setAnsweredCount(0);
       
       if (generatedPin) {
         update(ref(db, `games/${generatedPin}`), {
-          currentQuestion: nextIndex
+          currentQuestion: currentShuffledIndex
         });
       }
     } else {
+      // Barcha savollar tugadi
+      console.log("🏁 O'yin tugadi");
       setView('results');
     }
   };
 
-  // --- TIMER EFFECT ---
+  // --- TIMER EFFECT (YANGILANDI) ---
   useEffect(() => {
     let interval;
     if (view === 'quiz_mode' && timer > 0 && questionStatus === 'active') {
@@ -881,18 +1078,87 @@ export default function App() {
             }
             return 0;
           }
+          
+          // O'qituvchi uchun auto-skip
+          if (!playerName && view === 'quiz_mode') {
+            const answeredCount = studentAnswers[currentShuffledIndex - 1] || 0;
+            const totalPlayers = players.length;
+            
+            if (totalPlayers > 0) {
+              const answeredPercent = (answeredCount / totalPlayers) * 100;
+              
+              if (answeredPercent >= 100 && t > 3) {
+                return 3; // Darhol 3 soniyaga tushir
+              }
+              else if (answeredPercent >= 90 && t > 5) {
+                return 5; // 5 soniyaga tushir
+              }
+              else if (answeredPercent >= 80 && t < (timeSettings[quizMode] - 10)) {
+                return Math.max(5, t - 2);
+              }
+              else if (answeredPercent >= 70 && t < (timeSettings[quizMode] - 15)) {
+                return Math.max(7, t - 1.5);
+              }
+            }
+          }
+          
           return t - 1;
         });
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [timer, view, questionStatus, playerName, quizMode]);
+  }, [timer, view, questionStatus, playerName, quizMode, studentAnswers, currentShuffledIndex, players.length, timeSettings]);
 
-  const activeSub = subjects.find(s => s.id === activeSubId);
+  // ===== TUZATILGAN 390-QATOR ATROFIDAGI KOD =====
+  const subStatus = activeSub ? 'Faol' : 'Faol emas';
+  const subName = activeSub?.name || 'Obuna tanlanmagan';
+
   const lightPrimary = themeColor;
 
   // Podium uchun g'oliblarni hisoblash
   const sortedForPodium = Object.entries(liveScores).sort(([, a], [, b]) => b - a).slice(0, 3);
+
+  // ===== YANGI FUNKSIYA: Savollarni qayta aralashtirish =====
+  const reshuffleQuestions = () => {
+    if (!activeSub || !activeSub.questions) return;
+    
+    console.log("🔄 Savollarni qayta aralashtirish...");
+    const shuffled = shuffleQuestions(activeSub.questions);
+    setShuffledQuestions(shuffled);
+    setCurrentShuffledIndex(0);
+    setUsedQuestionIds(new Set());
+    setAllQuestionsAnswered(false);
+    setTimer(getModeTime(quizMode));
+    
+    console.log(`✅ ${shuffled.length} ta savol qayta aralashtirildi`);
+    
+    // Ogohlantirish
+    alert(`✅ ${shuffled.length} ta savol qayta aralashtirildi!\nEndi har bir savol o'z variantlari bilan birga ko'rsatiladi.`);
+  };
+
+  // ===== JORIY SAVOLNI OLISH FUNKSIYASI (MUHIM!) =====
+  const getCurrentQuestion = () => {
+    if (quizMode === 'marathon') {
+      return marathonQuestions[questionCounter];
+    } else {
+      // ⭐⭐ MUHIM: Joriy indeksdan 1 ni ayirish kerak, chunki indeks allaqachon oshirilgan ⭐⭐
+      const currentIndex = Math.max(0, currentShuffledIndex - 1);
+      if (currentIndex < shuffledQuestions.length) {
+        return shuffledQuestions[currentIndex];
+      } else if (shuffledQuestions.length > 0) {
+        return shuffledQuestions[0];
+      }
+    }
+    return null;
+  };
+
+  // ===== JAVOB BERISH TUGMALARI UCHUN TO'G'RI JAVOBNI TEKSHIRISH =====
+  const checkAnswer = (selectedIndex) => {
+    const currentQuestion = getCurrentQuestion();
+    if (!currentQuestion) return false;
+    
+    return selectedIndex === currentQuestion.correct;
+  };
 
   return (
     <div 
@@ -1038,21 +1304,36 @@ export default function App() {
               🎨 <span className="ms-3">Orqa fon</span>
             </button>
             
+            {/* ⭐ YANGI: Savollarni aralashtirish tugmasi ⭐ */}
+            {view === 'quiz_mode' && activeSub && (
+              <button 
+                className="list-group-item list-group-item-action border-0 py-3 d-flex align-items-center text-warning"
+                onClick={() => { 
+                  reshuffleQuestions(); 
+                  setSidebarOpen(false); 
+                }}
+              >
+                <FiShuffle className="me-3" size={20} />
+                <span>Savollarni aralashtirish</span>
+              </button>
+            )}
+            
             <div className="mt-4 pt-3 border-top">
-              <h6 className="small text-uppercase text-muted mb-3">Ranglar</h6>
+              <h6 className="small text-uppercase text-muted mb-3">Ranglar ({themeColors.length} ta)</h6>
               <div className="d-flex flex-wrap gap-2">
-                {themeColors.map(color => (
+                {themeColors.map((color, index) => (
                   <button
-                    key={color}
-                    className="btn btn-sm rounded-circle"
+                    key={index}
+                    className="btn btn-sm rounded-circle shadow-sm"
                     style={{ 
                       backgroundColor: color,
                       width: '30px',
                       height: '30px',
-                      border: themeColor === color ? '3px solid white' : 'none'
+                      border: themeColor === color ? '3px solid white' : '1px solid rgba(0,0,0,0.1)',
+                      boxShadow: themeColor === color ? `0 0 10px ${color}` : 'none'
                     }}
                     onClick={() => setThemeColor(color)}
-                    title={`Rang: ${color}`}
+                    title={`Rang #${index + 1}: ${color}`}
                   />
                 ))}
               </div>
@@ -1197,6 +1478,16 @@ export default function App() {
                   </span>
                 </div>
                 
+                {/* ⭐ YANGI: Random rejim ko'rsatgichi ⭐ */}
+                {view === 'quiz_mode' && (
+                  <div className="me-2">
+                    <span className="badge bg-info">
+                      <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                      Random
+                    </span>
+                  </div>
+                )}
+                
                 {/* Survival jonlari ko'rsatgichi */}
                 {quizMode === 'survival' && view === 'quiz_mode' && (
                   <div className="me-2 d-flex align-items-center">
@@ -1254,6 +1545,18 @@ export default function App() {
                 >
                   🎨
                 </button>
+                
+                {/* ⭐ YANGI: Savollarni aralashtirish tugmasi ⭐ */}
+                {view === 'quiz_mode' && activeSub && (
+                  <button 
+                    className="btn btn-sm btn-outline-light rounded-circle d-flex align-items-center justify-content-center"
+                    style={{ width: '38px', height: '38px' }}
+                    onClick={reshuffleQuestions}
+                    title="Savollarni qayta aralashtirish"
+                  >
+                    <FiShuffle size={18} />
+                  </button>
+                )}
                 
                 {user && view === 'teacher' && (
                   <button 
@@ -1571,10 +1874,10 @@ export default function App() {
                       <div className="dropdown-menu">
                         {['normal', 'blitz', 'survival', 'marathon'].map(mode => (
                           <button key={mode} className="dropdown-item" onClick={() => handleModeChange(mode)}>
-                            {mode === 'normal' && '📝 Normal'}
-                            {mode === 'blitz' && '⚡ Blitz'}
-                            {mode === 'survival' && '🔥 Survival'}
-                            {mode === 'marathon' && '🏃 Marathon'}
+                            {mode === 'normal' && '📝 Normal (Random)'}
+                            {mode === 'blitz' && '⚡ Blitz (Random)'}
+                            {mode === 'survival' && '🔥 Survival (Random)'}
+                            {mode === 'marathon' && '🏃 Marathon (Random)'}
                           </button>
                         ))}
                       </div>
@@ -1653,7 +1956,7 @@ export default function App() {
                               <div className="d-flex justify-content-between align-items-center">
                                 <span className="text-muted">Rejim:</span>
                                 <span className={`badge ${quizMode === 'blitz' ? 'bg-warning' : quizMode === 'survival' ? 'bg-danger' : quizMode === 'marathon' ? 'bg-success' : 'bg-primary'}`}>
-                                  {quizMode}
+                                  {quizMode} (Random)
                                 </span>
                               </div>
 
@@ -1777,7 +2080,7 @@ export default function App() {
                             
                             {/* Variantlar */}
                             <div className="mb-4">
-                              <label className="form-label fw-bold">Variantlar</label>
+                              <label className="form-label fw-bold">Variantlar (Random tartibda ko'rsatiladi)</label>
                               {newQ.options.map((opt, i) => (
                                 <div key={i} className="input-group mb-2">
                                   <div className="input-group-text">
@@ -1873,6 +2176,7 @@ export default function App() {
                                       <div className="small text-muted">
                                         <span className="me-3">⏱️ {q.time}s</span>
                                         <span>⭐ {q.points} ball</span>
+                                        <span className="ms-3">🔀 Random variantlar</span>
                                       </div>
                                     </div>
                                   </motion.div>
@@ -2013,10 +2317,10 @@ export default function App() {
                         {/* Rejim va holat */}
                         <div className="d-flex justify-content-center gap-3 mb-5">
                           <span className={`badge ${quizMode === 'blitz' ? 'bg-warning' : quizMode === 'survival' ? 'bg-danger' : quizMode === 'marathon' ? 'bg-success' : 'bg-dark'} fs-5 px-4 py-2 rounded-pill`}>
-                            {quizMode === 'normal' && '📝 Normal'}
-                            {quizMode === 'blitz' && '⚡ Blitz'}
-                            {quizMode === 'survival' && '🔥 Survival'}
-                            {quizMode === 'marathon' && '🏃 Marathon'}
+                            {quizMode === 'normal' && '📝 Normal (Random)'}
+                            {quizMode === 'blitz' && '⚡ Blitz (Random)'}
+                            {quizMode === 'survival' && '🔥 Survival (Random)'}
+                            {quizMode === 'marathon' && '🏃 Marathon (Random)'}
                           </span>
                           <span className="badge bg-white text-dark fs-5 px-4 py-2 rounded-pill">
                             <FiUsers className="me-2" />
@@ -2088,10 +2392,14 @@ export default function App() {
                               <p className="mt-2 opacity-75">O'qituvchi o'yinni boshlashini kuting...</p>
                               <div className="mt-3">
                                 <span className={`badge ${quizMode === 'blitz' ? 'bg-warning' : quizMode === 'survival' ? 'bg-danger' : quizMode === 'marathon' ? 'bg-success' : 'bg-primary'}`}>
-                                  Rejim: {quizMode}
+                                  Rejim: {quizMode} (Random)
                                 </span>
                                 <span className="badge bg-secondary ms-2">
                                   Vaqt: {timeSettings[quizMode]}s
+                                </span>
+                                <span className="badge bg-info ms-2">
+                                  <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                                  Random tartib
                                 </span>
                               </div>
                             </div>
@@ -2104,7 +2412,7 @@ export default function App() {
               </div>
             )}
 
-            {/* --- QUIZ MODE (O'QUVCHI UCHUN - YANGILANDI) --- */}
+            {/* --- QUIZ MODE (O'QUVCHI UCHUN - YANGILANDI VA TUZATILGAN) --- */}
             {view === 'quiz_mode' && activeSub && playerName && (
               <div className="container py-4">
                 <div className="row g-4">
@@ -2119,7 +2427,9 @@ export default function App() {
                       isDarkMode={isDarkMode}
                       quizMode={quizMode}
                       survivalLives={survivalLives}
-                      questionCounter={questionCounter}
+                      questionCounter={quizMode === 'marathon' ? questionCounter + 1 : currentShuffledIndex}
+                      totalQuestions={quizMode === 'marathon' ? null : shuffledQuestions.length}
+                      usedQuestions={currentShuffledIndex}
                     />
                     
                     {/* Savol kartasi */}
@@ -2130,17 +2440,15 @@ export default function App() {
                           <div className="col-md-6">
                             <div className="d-flex align-items-center">
                               {quizMode !== 'marathon' ? (
-                                activeSub?.questions?.map((_, idx) => (
-                                  <div 
-                                    key={idx}
-                                    className={`rounded-circle me-2 ${idx === currentQIndex ? 'bg-primary' : correctAnswers.some(a => a.questionNumber === idx + 1) ? 'bg-success' : 'bg-light'}`}
-                                    style={{ 
-                                      width: '12px', 
-                                      height: '12px',
-                                      border: idx === currentQIndex ? `2px solid ${themeColor}` : 'none'
-                                    }}
-                                  />
-                                ))
+                                <div className="d-flex align-items-center">
+                                  <span className="badge bg-info me-2">
+                                    <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                                    Random
+                                  </span>
+                                  <span className="text-muted">
+                                    Savol: {currentShuffledIndex}/{shuffledQuestions.length}
+                                  </span>
+                                </div>
                               ) : (
                                 <div className="d-flex align-items-center">
                                   <div className="badge bg-success me-2">♾️ Marathon</div>
@@ -2154,11 +2462,16 @@ export default function App() {
                                 style={{ 
                                   width: quizMode === 'marathon' 
                                     ? `${((questionCounter % 10) / 10) * 100}%`
-                                    : `${((currentQIndex + 1) / (activeSub.questions.length || 1)) * 100}%`,
+                                    : `${((currentShuffledIndex) / shuffledQuestions.length) * 100}%`,
                                   backgroundColor: themeColor
                                 }}
                               />
                             </div>
+                            {quizMode !== 'marathon' && (
+                              <small className="text-muted mt-1">
+                                {currentShuffledIndex} ta savol ko'rsatildi
+                              </small>
+                            )}
                           </div>
                           
                           <div className="col-md-6 text-end">
@@ -2194,55 +2507,71 @@ export default function App() {
                           </div>
                         </div>
                         
-                        {/* Savol */}
+                        {/* Savol (MUHIM: Joriy savolni to'g'ri olish) */}
                         <motion.div
-                          key={quizMode === 'marathon' ? questionCounter : currentQIndex}
+                          key={quizMode === 'marathon' ? questionCounter : currentShuffledIndex}
                           initial={{ opacity: 0, y: 20 }}
                           animate={{ opacity: 1, y: 0 }}
                           className="text-center mb-5"
                         >
                           <div className="d-flex justify-content-center mb-4">
                             <span className="badge bg-primary me-3">
-                              {quizMode === 'marathon' ? `Savol ${questionCounter + 1} ♾️` : `Savol ${currentQIndex + 1}`}
+                              {quizMode === 'marathon' ? `Savol ${questionCounter + 1} ♾️` : `Savol ${currentShuffledIndex}`}
                             </span>
-                            {activeSub.questions[currentQIndex]?.difficulty && (
-                              <span className={`badge ${activeSub.questions[currentQIndex].difficulty === 'easy' ? 'bg-success' : activeSub.questions[currentQIndex].difficulty === 'hard' ? 'bg-danger' : 'bg-warning'}`}>
-                                {activeSub.questions[currentQIndex].difficulty === 'easy' ? '😊 Oson' : 
-                                 activeSub.questions[currentQIndex].difficulty === 'hard' ? '😓 Qiyin' : '😐 O\'rtacha'}
+                            
+                            {/* ⭐⭐ ASOSIY TUZATISH: Joriy savolni to'g'ri olish ⭐⭐ */}
+                            {quizMode !== 'marathon' && currentShuffledIndex > 0 && shuffledQuestions[currentShuffledIndex - 1]?.difficulty && (
+                              <span className={`badge ${shuffledQuestions[currentShuffledIndex - 1].difficulty === 'easy' ? 'bg-success' : shuffledQuestions[currentShuffledIndex - 1].difficulty === 'hard' ? 'bg-danger' : 'bg-warning'}`}>
+                                {shuffledQuestions[currentShuffledIndex - 1].difficulty === 'easy' ? '😊 Oson' : 
+                                 shuffledQuestions[currentShuffledIndex - 1].difficulty === 'hard' ? '😓 Qiyin' : '😐 O\'rtacha'}
                               </span>
                             )}
+                            
+                            {quizMode === 'marathon' && marathonQuestions[questionCounter]?.difficulty && (
+                              <span className={`badge ${marathonQuestions[questionCounter].difficulty === 'easy' ? 'bg-success' : marathonQuestions[questionCounter].difficulty === 'hard' ? 'bg-danger' : 'bg-warning'}`}>
+                                {marathonQuestions[questionCounter].difficulty === 'easy' ? '😊 Oson' : 
+                                 marathonQuestions[questionCounter].difficulty === 'hard' ? '😓 Qiyin' : '😐 O\'rtacha'}
+                              </span>
+                            )}
+                            
                             {streak >= 5 && (
                               <span className="badge bg-warning ms-3">
                                 🔥 Streak {streak}
                               </span>
                             )}
+                            
                             {quizMode === 'marathon' && streak >= 3 && (
                               <span className="badge bg-success ms-3">
                                 🏃 Ketma-ket {streak}
                               </span>
                             )}
+                            
+                            <span className="badge bg-info ms-3">
+                              <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                              Random
+                            </span>
                           </div>
                           
+                          {/* ⭐⭐ ASOSIY TUZATISH: Savol matnini to'g'ri olish ⭐⭐ */}
                           <h2 className="display-6 fw-bold mb-5">
                             {quizMode === 'marathon' 
-                              ? marathonQuestions[questionCounter]?.text || activeSub.questions[currentQIndex]?.text
-                              : activeSub.questions[currentQIndex]?.text}
+                              ? marathonQuestions[questionCounter]?.text
+                              : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.text : shuffledQuestions[0]?.text)}
                           </h2>
                           
-                          {/* Variantlar */}
+                          {/* Variantlar (MUHIM: To'g'ri savolning variantlarini olish) */}
                           <div className="row g-4">
-                            {(quizMode === 'marathon' ? marathonQuestions[questionCounter]?.options : activeSub.questions[currentQIndex]?.options)?.map((opt, i) => (
+                            {(quizMode === 'marathon' 
+                              ? marathonQuestions[questionCounter]?.options 
+                              : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.options : shuffledQuestions[0]?.options)
+                            )?.map((opt, i) => (
                               <div key={i} className="col-12 col-md-6">
                                 <motion.button
                                   whileHover={{ scale: 1.03, boxShadow: '0 10px 25px rgba(0,0,0,0.2)' }}
                                   whileTap={{ scale: 0.97 }}
-                                  disabled={!!feedback}
-                                  className={`btn w-100 py-4 fs-5 fw-bold border-3 ${feedback && i === (quizMode === 'marathon' ? marathonQuestions[questionCounter]?.correct : activeSub.questions[currentQIndex].correct) ? 'btn-success border-success' : feedback === 'wrong' ? 'btn-danger border-danger' : 'btn-outline-primary border-primary'}`}
-                                  onClick={() => handleAnswer(
-                                    i === (quizMode === 'marathon' 
-                                      ? marathonQuestions[questionCounter]?.correct 
-                                      : activeSub.questions[currentQIndex].correct)
-                                  )}
+                                  disabled={!!feedback || allQuestionsAnswered}
+                                  className={`btn w-100 py-4 fs-5 fw-bold border-3 ${feedback && checkAnswer(i) ? 'btn-success border-success' : feedback && !checkAnswer(i) ? 'btn-danger border-danger' : 'btn-outline-primary border-primary'}`}
+                                  onClick={() => handleAnswer(checkAnswer(i))}
                                   style={{ 
                                     height: '100px',
                                     borderRadius: '15px'
@@ -2253,6 +2582,14 @@ export default function App() {
                               </div>
                             ))}
                           </div>
+                          
+                          {/* Barcha savollar tugaganda xabar */}
+                          {allQuestionsAnswered && (
+                            <div className="alert alert-info mt-4">
+                              <h5>✅ Barcha savollarga javob berdingiz!</h5>
+                              <p>Natijalarni ko'rish uchun kuting...</p>
+                            </div>
+                          )}
                         </motion.div>
                         
                         {/* Feedback animatsiya */}
@@ -2302,7 +2639,11 @@ export default function App() {
                         </h3>
                         <div className="d-flex gap-2">
                           <span className={`badge ${quizMode === 'blitz' ? 'bg-warning' : quizMode === 'survival' ? 'bg-danger' : quizMode === 'marathon' ? 'bg-success' : 'bg-dark'} fs-6`}>
-                            {quizMode.toUpperCase()}
+                            {quizMode.toUpperCase()} (Random)
+                          </span>
+                          <span className="badge bg-info fs-6">
+                            <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                            Random
                           </span>
                           <span className="badge bg-light text-dark fs-6">
                             ⏱️ {timeSettings[quizMode]}s
@@ -2316,12 +2657,12 @@ export default function App() {
                           <div className="col-md-3">
                             <div className="card border-0 shadow-sm h-100 text-center py-4">
                               <div className="display-6 text-primary mb-2">
-                                {quizMode === 'marathon' ? questionCounter + 1 : currentQIndex + 1}
+                                {quizMode === 'marathon' ? questionCounter + 1 : currentShuffledIndex}
                               </div>
                               <div className="small text-muted">Joriy savol</div>
                               <div className="mt-2">
                                 <small className="text-muted">
-                                  {quizMode === 'marathon' ? '♾️ Cheksiz' : `Jami: ${activeSub.questions.length}`}
+                                  {quizMode === 'marathon' ? '♾️ Cheksiz' : `Jami: ${shuffledQuestions.length}`}
                                 </small>
                               </div>
                             </div>
@@ -2348,19 +2689,21 @@ export default function App() {
                           <div className="col-md-3">
                             <div className="card border-0 shadow-sm h-100 text-center py-4">
                               <div className="display-6 text-success mb-2">
-                                {studentAnswers[currentQIndex] || 0}
+                                {studentAnswers[currentShuffledIndex - 1] || 0}
                               </div>
                               <div className="small text-muted">Javob berganlar</div>
                               <div className="progress mt-2" style={{ height: '6px' }}>
                                 <div 
                                   className="progress-bar bg-success" 
                                   style={{ 
-                                    width: `${players.length > 0 ? ((studentAnswers[currentQIndex] || 0) / players.length) * 100 : 0}%` 
+                                    width: `${players.length > 0 ? ((studentAnswers[currentShuffledIndex - 1] || 0) / players.length) * 100 : 0}%` 
                                   }}
                                 />
                               </div>
                               <small className="text-muted">
-                                Jami: {players.length}
+                                {players.length > 0 
+                                  ? `${Math.round(((studentAnswers[currentShuffledIndex - 1] || 0) / players.length) * 100)}%`
+                                  : '0%'}
                               </small>
                             </div>
                           </div>
@@ -2388,37 +2731,61 @@ export default function App() {
                             <div className="d-flex justify-content-between align-items-center mb-4">
                               <h4 className="fw-bold mb-0">
                                 <span className="badge bg-primary me-3">
-                                  #{quizMode === 'marathon' ? questionCounter + 1 : currentQIndex + 1}
+                                  #{quizMode === 'marathon' ? questionCounter + 1 : currentShuffledIndex}
                                 </span>
-                                Savol
+                                Savol (Random tartib)
                               </h4>
-                              {activeSub.questions[currentQIndex]?.difficulty && (
-                                <span className={`badge ${activeSub.questions[currentQIndex].difficulty === 'easy' ? 'bg-success' : activeSub.questions[currentQIndex].difficulty === 'hard' ? 'bg-danger' : 'bg-warning'}`}>
-                                  {activeSub.questions[currentQIndex].difficulty === 'easy' ? '😊 OSON' : 
-                                   activeSub.questions[currentQIndex].difficulty === 'hard' ? '😓 QIYIN' : '😐 O\'RTACHA'}
+                              
+                              {/* ⭐⭐ TUZATISH: Joriy savolni to'g'ri olish ⭐⭐ */}
+                              {quizMode !== 'marathon' && currentShuffledIndex > 0 && shuffledQuestions[currentShuffledIndex - 1]?.difficulty && (
+                                <span className={`badge ${shuffledQuestions[currentShuffledIndex - 1].difficulty === 'easy' ? 'bg-success' : shuffledQuestions[currentShuffledIndex - 1].difficulty === 'hard' ? 'bg-danger' : 'bg-warning'}`}>
+                                  {shuffledQuestions[currentShuffledIndex - 1].difficulty === 'easy' ? '😊 OSON' : 
+                                   shuffledQuestions[currentShuffledIndex - 1].difficulty === 'hard' ? '😓 QIYIN' : '😐 O\'RTACHA'}
                                 </span>
                               )}
-                              {quizMode === 'marathon' && (
-                                <span className="badge bg-success">
-                                  ♾️ Marathon
+                              
+                              {quizMode === 'marathon' && marathonQuestions[questionCounter]?.difficulty && (
+                                <span className={`badge ${marathonQuestions[questionCounter].difficulty === 'easy' ? 'bg-success' : marathonQuestions[questionCounter].difficulty === 'hard' ? 'bg-danger' : 'bg-warning'}`}>
+                                  {marathonQuestions[questionCounter].difficulty === 'easy' ? '😊 OSON' : 
+                                   marathonQuestions[questionCounter].difficulty === 'hard' ? '😓 QIYIN' : '😐 O\'RTACHA'}
                                 </span>
                               )}
+                              
+                              <span className="badge bg-info">
+                                <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                                Random
+                              </span>
                             </div>
                             
-                            <h3 className="mb-5">{activeSub.questions[currentQIndex]?.text}</h3>
+                            {/* ⭐⭐ TUZATISH: Savol matnini to'g'ri olish ⭐⭐ */}
+                            <h3 className="mb-5">
+                              {quizMode === 'marathon' 
+                                ? marathonQuestions[questionCounter]?.text
+                                : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.text : "Savol yuklanmoqda...")}
+                            </h3>
                             
+                            {/* Variantlar (To'g'ri savolning variantlarini olish) */}
                             <div className="row g-4">
-                              {activeSub.questions[currentQIndex]?.options.map((opt, i) => (
+                              {(quizMode === 'marathon' 
+                                ? marathonQuestions[questionCounter]?.options 
+                                : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.options : [])
+                              )?.map((opt, i) => (
                                 <div key={i} className="col-12 col-md-6">
-                                  <div className={`card border-3 ${i === activeSub.questions[currentQIndex].correct ? 'border-success bg-success bg-opacity-10' : 'border-light'}`}>
+                                  <div className={`card border-3 ${i === (quizMode === 'marathon' 
+                                    ? marathonQuestions[questionCounter]?.correct 
+                                    : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.correct : 0)) ? 'border-success bg-success bg-opacity-10' : 'border-light'}`}>
                                     <div className="card-body">
                                       <div className="d-flex align-items-center">
-                                        <div className={`rounded-circle me-3 ${i === activeSub.questions[currentQIndex].correct ? 'bg-success text-white' : 'bg-light'}`}
+                                        <div className={`rounded-circle me-3 ${i === (quizMode === 'marathon' 
+                                          ? marathonQuestions[questionCounter]?.correct 
+                                          : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.correct : 0)) ? 'bg-success text-white' : 'bg-light'}`}
                                           style={{ width: '30px', height: '30px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                                           {String.fromCharCode(65 + i)}
                                         </div>
                                         <div className="fs-5">{opt}</div>
-                                        {i === activeSub.questions[currentQIndex].correct && (
+                                        {i === (quizMode === 'marathon' 
+                                          ? marathonQuestions[questionCounter]?.correct 
+                                          : (currentShuffledIndex > 0 ? shuffledQuestions[currentShuffledIndex - 1]?.correct : 0)) && (
                                           <span className="badge bg-success ms-auto">To'g'ri javob</span>
                                         )}
                                       </div>
@@ -2437,14 +2804,59 @@ export default function App() {
                             whileTap={{ scale: 0.95 }}
                             className="btn btn-primary btn-lg px-5 py-3"
                             onClick={goToNextQuestion}
-                            disabled={timer > 0 && questionStatus === 'active' && quizMode !== 'marathon'}
+                            disabled={(timer > 0 && questionStatus === 'active' && quizMode !== 'marathon') || allQuestionsAnswered}
                           >
                             <FiChevronRight className="me-2" />
-                            {quizMode === 'marathon' 
-                              ? 'Keyingi savol (Marathon)'
-                              : currentQIndex + 1 === activeSub.questions.length 
-                                ? 'Natijalarni ko\'rish' 
-                                : 'Keyingi savol'}
+                            {allQuestionsAnswered ? 'Natijalarni ko\'rish' : 
+                             quizMode === 'marathon' 
+                               ? 'Keyingi savol (Marathon)' 
+                               : 'Keyingi savol (Random)'}
+                          </motion.button>
+                          
+                          {/* Savollarni qayta aralashtirish tugmasi */}
+                          <motion.button 
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            className="btn btn-warning btn-lg px-5 py-3 d-flex align-items-center"
+                            onClick={reshuffleQuestions}
+                          >
+                            <FiShuffle className="me-2" />
+                            Qayta aralashtirish
+                          </motion.button>
+                          
+                          {/* Tezlashtirish tugmasi */}
+                          <motion.button 
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            className="btn btn-success btn-lg px-5 py-3"
+                            onClick={() => {
+                              const answeredCount = studentAnswers[currentShuffledIndex - 1] || 0;
+                              const totalPlayers = players.length;
+                              
+                              if (totalPlayers === 0) {
+                                alert("⚠️ Hali o'quvchilar qo'shilmagan!");
+                                return;
+                              }
+                              
+                              const answeredPercent = (answeredCount / totalPlayers) * 100;
+                              
+                              if (answeredPercent >= 80) {
+                                setTimer(3);
+                                setQuestionStatus('completed');
+                                
+                                setTimeout(() => {
+                                  goToNextQuestion();
+                                }, 3000);
+                              } else {
+                                alert(`⏳ Hali ${Math.round(100 - answeredPercent)}% o'quvchi javob bermadi!`);
+                              }
+                            }}
+                            disabled={players.length === 0 || questionStatus !== 'active' || allQuestionsAnswered}
+                          >
+                            <FiFastForward className="me-2" />
+                            Tezlashtirish ({players.length > 0 
+                              ? `${Math.round(((studentAnswers[currentShuffledIndex - 1] || 0) / players.length) * 100)}% javob bergan`
+                              : '0%'})
                           </motion.button>
                           
                           {quizMode !== 'marathon' && (
@@ -2458,7 +2870,7 @@ export default function App() {
                                     setTimer(5);
                                   }
                                 }}
-                                disabled={timer <= 5}
+                                disabled={timer <= 5 || allQuestionsAnswered}
                               >
                                 <FiFastForward className="me-2" />
                                 Vaqtni tezlashtirish (5s)
@@ -2471,7 +2883,11 @@ export default function App() {
                                 onClick={() => {
                                   setTimer(0);
                                   setQuestionStatus('completed');
+                                  setTimeout(() => {
+                                    goToNextQuestion();
+                                  }, 1000);
                                 }}
+                                disabled={allQuestionsAnswered}
                               >
                                 <FiPause className="me-2" />
                                 Savolni tugatish
@@ -2480,19 +2896,45 @@ export default function App() {
                           )}
                         </div>
                         
+                        {/* Barcha savollar tugaganda xabar */}
+                        {allQuestionsAnswered && (
+                          <div className="alert alert-success text-center mb-4">
+                            <h5>✅ Barcha savollar tugadi!</h5>
+                            <p>O'quvchilar natijalarni kutmoqda. Natijalarni ko'rish tugmasini bosing.</p>
+                            <button 
+                              className="btn btn-primary btn-lg mt-2"
+                              onClick={() => {
+                                saveGameHistory();
+                                setView('results');
+                              }}
+                            >
+                              Natijalarni ko'rish
+                            </button>
+                          </div>
+                        )}
+                        
                         {/* O'quvchilar holati */}
                         <div className="card border-0 shadow-sm">
                           <div className="card-body">
                             <h5 className="fw-bold mb-4 d-flex align-items-center">
                               <FiUsers className="me-2" />
                               O'quvchilar holati ({players.length} ta)
+                              <div className="ms-auto">
+                                <span className={`badge ${players.length > 0 && ((studentAnswers[currentShuffledIndex - 1] || 0) / players.length) >= 0.8 
+                                  ? 'bg-success' 
+                                  : 'bg-warning'}`}>
+                                  {players.length > 0 
+                                    ? `${Math.round(((studentAnswers[currentShuffledIndex - 1] || 0) / players.length) * 100)}% javob bergan`
+                                    : '0%'}
+                                </span>
+                              </div>
                             </h5>
                             
                             <div className="row g-3">
                               {players.map((player, index) => {
                                 const playerScore = liveScores[player.name || player] || 0;
                                 const playerAnswers = allStudentAnswers.filter(a => a.playerName === (player.name || player));
-                                const currentAnswer = playerAnswers.find(a => a.questionIndex === currentQIndex);
+                                const currentAnswer = playerAnswers.find(a => a.questionIndex === (currentShuffledIndex - 1));
                                 const correctCount = playerAnswers.filter(a => a.isCorrect).length;
                                 
                                 return (
@@ -2572,6 +3014,14 @@ export default function App() {
                             ? 'Marathon yakunlandi!' 
                             : 'Quiz muvaffaqiyatli yakunlandi'}
                         </p>
+                        {quizMode !== 'marathon' && (
+                          <div className="mt-3">
+                            <span className="badge bg-info">
+                              <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                              Random tartibda o'ynaldi
+                            </span>
+                          </div>
+                        )}
                       </div>
                       
                       <div className="card-body p-4 p-md-5">
@@ -2585,6 +3035,11 @@ export default function App() {
                                 <span className={`badge ${quizMode === 'blitz' ? 'bg-warning' : quizMode === 'survival' ? 'bg-danger' : quizMode === 'marathon' ? 'bg-success' : 'bg-primary'}`}>
                                   Rejim: {quizMode}
                                 </span>
+                                {quizMode !== 'marathon' && (
+                                  <span className="badge bg-info ms-2">
+                                    Random tartib
+                                  </span>
+                                )}
                               </div>
                               
                               <div className="row text-center">
@@ -2616,6 +3071,12 @@ export default function App() {
                                     <div className="small text-muted">Javob berilgan savollar</div>
                                   </div>
                                 )}
+                                {quizMode !== 'marathon' && (
+                                  <div className="col-6">
+                                    <div className="display-6 fw-bold text-primary">{shuffledQuestions.length}</div>
+                                    <div className="small text-muted">Jami savollar</div>
+                                  </div>
+                                )}
                                 <div className="col-6">
                                   <div className="display-6 fw-bold text-info">{timeSettings[quizMode]}s</div>
                                   <div className="small text-muted">O'rtacha vaqt</div>
@@ -2626,7 +3087,11 @@ export default function App() {
                                 <div 
                                   className="progress-bar"
                                   style={{ 
-                                    width: `${activeSub?.questions?.length ? (correctAnswers.length / activeSub.questions.length) * 100 : quizMode === 'marathon' ? Math.min((questionCounter / 20) * 100, 100) : 0}%`,
+                                    width: `${quizMode === 'marathon' 
+                                      ? Math.min((questionCounter / 20) * 100, 100)
+                                      : shuffledQuestions.length 
+                                        ? (correctAnswers.length / shuffledQuestions.length) * 100 
+                                        : 0}%`,
                                     backgroundColor: themeColor
                                   }}
                                 />
@@ -2635,7 +3100,7 @@ export default function App() {
                                 <small>
                                   {quizMode === 'marathon' 
                                     ? `Marathon: ${questionCounter} savol`
-                                    : `Natija: ${correctAnswers.length}/${activeSub?.questions?.length || 0} (${Math.round((correctAnswers.length / (activeSub?.questions?.length || 1)) * 100)}%)`}
+                                    : `Natija: ${correctAnswers.length}/${shuffledQuestions.length} (${Math.round((correctAnswers.length / shuffledQuestions.length) * 100)}%)`}
                                 </small>
                               </div>
                             </div>
@@ -2750,6 +3215,12 @@ export default function App() {
                           <div className="card border-0 shadow-sm mb-5">
                             <div className="card-body">
                               <h5 className="fw-bold mb-3">📊 Barcha o'yinchilar natijasi</h5>
+                              <div className="mb-3">
+                                <span className="badge bg-info">
+                                  <GiPerspectiveDiceSixFacesRandom className="me-1" />
+                                  Savollar random tartibda berildi
+                                </span>
+                              </div>
                               <div style={{ maxHeight: '300px', overflowY: 'auto' }}>
                                 {Object.entries(liveScores).sort(([, a], [, b]) => b - a).map(([n, s], index) => (
                                   <motion.div
@@ -2801,6 +3272,35 @@ export default function App() {
                               Natijani saqlash
                             </button>
                           )}
+                          
+                          {/* Yangi o'yin boshlash */}
+                          {!playerName && activeSub && (
+                            <motion.button 
+                              whileHover={{ scale: 1.05 }}
+                              whileTap={{ scale: 0.95 }}
+                              className="btn btn-success btn-lg px-5 py-3 fw-bold ms-3"
+                              onClick={() => {
+                                // Yangi o'yinni boshlash
+                                setScore(0);
+                                setStreak(0);
+                                setCorrectAnswers([]);
+                                setTimeBonuses([]);
+                                setAchievements([]);
+                                setSurvivalLives(3);
+                                setMarathonQuestions([]);
+                                setQuestionCounter(0);
+                                setShuffledQuestions([]);
+                                setUsedQuestionIds(new Set());
+                                setAllQuestionsAnswered(false);
+                                setCurrentShuffledIndex(0);
+                                setFeedback(null);
+                                setView('quiz_mode');
+                              }}
+                            >
+                              <FiRefreshCw className="me-2" />
+                              YANGI O'YIN
+                            </motion.button>
+                          )}
                         </div>
                       </div>
                     </motion.div>
@@ -2821,14 +3321,14 @@ export default function App() {
               <div className="row align-items-center g-3 text-center text-md-start">
                 <div className="col-md-4">
                   <h5 className="fw-bold mb-1 text-white">🧠 QUIZ MASTER</h5>
-                  <p className="small mb-0 opacity-75 text-white">Eng zo'r quiz tizimi</p>
+                  <p className="small mb-0 opacity-75 text-white">Eng zo'r quiz tizimi (Random tartib)</p>
                 </div>
                 <div className="col-md-4 text-center">
                   <h6 className="mb-1 small text-white">
                     Holat: <span className="badge bg-warning">{view.toUpperCase()}</span>
                   </h6>
                   <small className='opacity-75 d-block text-white'>
-                    O'quvchilar: {players.length} ta | Rejim: {quizMode} | Vaqt: {timeSettings[quizMode]}s
+                    O'quvchilar: {players.length} ta | Rejim: {quizMode} (Random) | Vaqt: {timeSettings[quizMode]}s
                   </small>
                 </div>
                 <div className="col-md-4 text-md-end">
@@ -2855,6 +3355,17 @@ export default function App() {
                     >
                       🎨
                     </button>
+                    {/* Savollarni aralashtirish tugmasi */}
+                    {view === 'quiz_mode' && activeSub && (
+                      <button 
+                        className="btn btn-sm btn-outline-light rounded-circle d-flex align-items-center justify-content-center"
+                        style={{ width: '36px', height: '36px' }}
+                        onClick={reshuffleQuestions}
+                        title="Savollarni qayta aralashtirish"
+                      >
+                        <FiShuffle size={16} />
+                      </button>
+                    )}
                     <button 
                       className="btn btn-sm btn-outline-light"
                       onClick={() => setSidebarOpen(true)}
@@ -2863,7 +3374,7 @@ export default function App() {
                     </button>
                   </div>
                   <small className='opacity-75 d-block mt-2 text-white'>
-                    &copy; {new Date().getFullYear()} QUIZ MASTER | Premium versiya
+                    &copy; {new Date().getFullYear()} QUIZ MASTER | Premium versiya | Random tartib
                   </small>
                 </div>
               </div>
